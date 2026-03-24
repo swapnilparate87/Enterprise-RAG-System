@@ -1,34 +1,35 @@
-# MINIMAL Requirements - Install in 2 minutes!
-# We'll add sentence-transformers later with a different method
+# ============================================================
+# Enterprise RAG System - Requirements
+# Compatible with Python 3.14 + Windows
+# ============================================================
 
 # Core Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic>=2.5.0
-pydantic-settings==2.1.0
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic>=2.12.0
+pydantic-settings>=2.7.0
 
-# LangChain Ecosystem
-langchain==0.1.0
-langchain-community==0.0.10
+# LangChain Ecosystem (let pip resolve compatible versions automatically)
+langchain>=0.3.0,<0.4.0
+langchain-community>=0.3.0,<0.4.0
+langchain-ollama>=0.2.0
+langchain-chroma>=1.1.0
+langchain-text-splitters>=0.3.0
 
-# Ollama integration
-langchain-ollama  # For Ollama LLM
-
-# Vector Database (FREE, Local)
-chromadb==0.4.18
+# Vector Database (latest — no pydantic.v1 issues)
+chromadb==1.5.5
 
 # Document Processing
-pypdf==3.17.4
-python-docx==1.1.0
-python-multipart==0.0.6
+pypdf==4.3.1
+python-docx==1.1.2
+python-multipart==0.0.20
+beautifulsoup4==4.12.3
+requests==2.32.3
 
 # Utilities
-python-dotenv==1.0.0
+python-dotenv==1.0.1
+sqlalchemy==2.0.36
 
-# Database
-sqlalchemy==2.0.23
-
-# For development
-pytest==7.4.3
-black==23.12.0
-httpx==0.25.2
+# Dev tools
+pytest==8.3.4
+httpx==0.28.1
