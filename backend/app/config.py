@@ -21,12 +21,12 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 10485760  # 10MB
 
     # FREE LLM Settings - Ollama (runs locally)
-    OLLAMA_MODEL: str = "mistral"
+    OLLAMA_MODEL: str = "gemma2:2b"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # FREE Embeddings - Ollama nomic-embed-text (runs locally)
     # Run: ollama pull nomic-embed-text
-    EMBEDDING_MODEL: str = "nomic-embed-text"
+    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
     # Vector Database - ChromaDB (FREE, local)
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"

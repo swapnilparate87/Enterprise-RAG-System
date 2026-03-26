@@ -218,14 +218,15 @@ async def query(request: QueryRequest):
     logger.info(f"❓ Query: {request.question[:100]}")
     try:
         result = rag_engine.query(question=request.question, k=request.k)
-        return QueryResponse(
-            answer=result.answer,
-            sources=result.sources,
-            confidence_score=result.confidence_score,
-            retrieval_time=result.retrieval_time,
-            generation_time=result.generation_time,
-            total_time=result.total_time,
-        )
+        return {
+            "answer": result.answer,
+            "sources": result.sources,
+            "confidence_score": result.confidence_score,
+            "retrieval_time": result.retrieval_time,
+            "generation_time": result.generation_time,
+            "total_time": result.total_time,
+            "model_used": rag_engine.ollama_model,  # ✅ actual model that answered
+        }
     except Exception as e:
         logger.error(f"Query error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -267,6 +268,90 @@ async def clear_database():
         logger.error(f"Clear error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error clearing database")
 
+
+
+
+@app.post("/api/v1/query-stream")
+async def query_stream(request: QueryRequest):
+    """Query with streaming response — tokens appear as they are generated"""
+    from fastapi.responses import StreamingResponse
+    from langchain_core.output_parsers import StrOutputParser
+
+    def generate():
+        try:
+            # Retrieve docs
+            retrieved_docs = rag_engine.vectorstore.similarity_search(
+                request.question, k=request.k
+            )
+            if not retrieved_docs:
+                yield "I don't have any documents to answer this question."
+                return
+
+            context = rag_engine._format_docs(retrieved_docs)
+            chain = rag_engine.qa_prompt | rag_engine.llm | StrOutputParser()
+
+            # Stream tokens
+            for chunk in rag_engine.llm.stream(
+                rag_engine.qa_prompt.format(context=context, question=request.question)
+            ):
+                yield chunk
+        except Exception as e:
+            yield f"Error: {str(e)}"
+
+    return StreamingResponse(generate(), media_type="text/plain")
+
+
+class SwitchModelRequest(BaseModel):
+    model_name: str
+
+
+# Model-specific settings optimized for each model size
+MODEL_CONFIGS = {
+    "qwen2:1.5b":     {"num_predict": 256,  "num_ctx": 1024, "top_k": 20},
+    "gemma2:2b":      {"num_predict": 384,  "num_ctx": 2048, "top_k": 30},
+    "mistral:latest": {"num_predict": 512,  "num_ctx": 3072, "top_k": 40},
+    "deepseek-r1:8b": {"num_predict": 512,  "num_ctx": 3072, "top_k": 40},
+}
+
+
+@app.post("/api/v1/switch-model")
+async def switch_model(request: SwitchModelRequest):
+    """Switch the active LLM model at runtime with model-optimized settings"""
+    global rag_engine
+    logger.info(f"Switching model to: {request.model_name}")
+    try:
+        from langchain_ollama import OllamaLLM
+
+        # Get optimized config for this model (fallback to safe defaults)
+        cfg = MODEL_CONFIGS.get(request.model_name, {"num_predict": 256, "num_ctx": 1024, "top_k": 20})
+
+        new_llm = OllamaLLM(
+            model=request.model_name,
+            base_url=settings.OLLAMA_BASE_URL,
+            temperature=0.1,
+            num_predict=cfg["num_predict"],
+            num_ctx=cfg["num_ctx"],
+            repeat_penalty=1.1,
+            top_k=cfg["top_k"],
+            top_p=0.85,
+        )
+
+        # Test the model responds before committing the switch
+        test = new_llm.invoke("Hi")
+        if not test:
+            raise Exception("Model did not respond to test prompt")
+
+        rag_engine.llm = new_llm
+        rag_engine.ollama_model = request.model_name
+        logger.info(f"✅ Model switched to: {request.model_name} (ctx={cfg['num_ctx']}, predict={cfg['num_predict']})")
+        return {
+            "message": f"Model switched to {request.model_name}",
+            "model": request.model_name,
+            "config": cfg
+        }
+    except Exception as e:
+        logger.error(f"Failed to switch model: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to switch model: {str(e)}")
 
 # Run with: uvicorn app.main:app --reload
 if __name__ == "__main__":

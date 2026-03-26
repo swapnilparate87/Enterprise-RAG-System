@@ -1,6 +1,6 @@
 """
 FREE Version RAG Engine - Zero Cost!
-Using: Ollama (local LLM + embeddings) + ChromaDB (vector store)
+Using: Ollama (local LLM) + HuggingFace Embeddings (local, fast) + ChromaDB
 """
 
 import logging
@@ -8,12 +8,12 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from langchain_ollama import OllamaLLM, OllamaEmbeddings
+from langchain_ollama import OllamaLLM
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.prompts import PromptTemplate
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RAGResponse:
-    """Structured response from RAG system"""
     answer: str
     sources: List[Dict]
     confidence_score: float
@@ -33,14 +32,16 @@ class RAGResponse:
 class FreeRAGEngine:
     """
     100% FREE RAG Engine
-    Uses: Ollama LLM + Ollama Embeddings + ChromaDB
+    - Ollama (local LLM — gemma2:2b recommended)
+    - HuggingFace all-MiniLM-L6-v2 (local embeddings, ~0.05s per query)
+    - ChromaDB (local vector store)
     Total Cost: $0/month!
     """
 
     def __init__(
         self,
-        ollama_model: str = "mistral",
-        embedding_model: str = "nomic-embed-text",
+        ollama_model: str = "gemma2:2b",
+        embedding_model: str = "all-MiniLM-L6-v2",
         persist_directory: str = "./chroma_db",
         chunk_size: int = 500,
         chunk_overlap: int = 100,
@@ -52,28 +53,28 @@ class FreeRAGEngine:
 
         logger.info("Initializing FREE RAG Engine...")
 
-        # FREE embeddings via Ollama
-        logger.info(f"Loading Ollama embeddings: {embedding_model}")
-        self.embeddings = OllamaEmbeddings(
-            model=embedding_model,
-            base_url=ollama_base_url
+        # ✅ Fast local embeddings — runs in Python, no network call (~0.05s)
+        logger.info(f"Loading HuggingFace embeddings: {embedding_model}")
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name=embedding_model,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True}
         )
-        logger.info("✅ Embeddings loaded (100% FREE!)")
+        logger.info("✅ Embeddings loaded — fast local inference!")
 
-        # FREE LLM via Ollama — optimized settings for speed
+        # ✅ FREE LLM via Ollama
         logger.info(f"Connecting to Ollama LLM: {ollama_model}")
         try:
             self.llm = OllamaLLM(
                 model=ollama_model,
                 base_url=ollama_base_url,
                 temperature=0.1,
-                num_predict=512,         # enough for detailed answers
-                num_ctx=2048,            # fits within 4GB VRAM
+                num_predict=256,   # shorter = faster, still detailed enough
+                num_ctx=1024,      # smaller context = faster GPU inference
                 repeat_penalty=1.1,
-                top_k=40,
-                top_p=0.9,
+                top_k=20,          # faster sampling
+                top_p=0.85,
             )
-            # ✅ No test call on startup — saves 5-10s every restart
             logger.info("✅ Ollama LLM configured (100% FREE!)")
         except Exception as e:
             logger.error(f"❌ Could not connect to Ollama: {e}")
@@ -87,7 +88,7 @@ class FreeRAGEngine:
             separators=["\n\n", "\n", " ", ""]
         )
 
-        # FREE vector store via ChromaDB
+        # ✅ ChromaDB vector store
         logger.info(f"Initializing ChromaDB at: {persist_directory}")
         self.vectorstore = Chroma(
             persist_directory=persist_directory,
@@ -95,32 +96,24 @@ class FreeRAGEngine:
         )
         logger.info("✅ ChromaDB initialized (100% FREE!)")
 
-        # ✅ Improved RAG prompt — detailed, structured answers
+        # Prompt template
         self.qa_prompt = PromptTemplate(
-            template="""You are an expert AI assistant with deep knowledge. Your job is to give thorough, accurate, and well-structured answers based on the provided context.
-
-INSTRUCTIONS:
-- Read the context carefully and extract ALL relevant information
-- Give a detailed, comprehensive answer — do not be vague or overly brief
-- Use bullet points or numbered lists when listing multiple items
-- Always cite which document/source supports each point
-- If the context contains numbers, statistics, or specific details — include them
-- If the context does NOT contain enough information, clearly say so and explain what you do know
-- Never make up information that is not in the context
+            template="""Use the context below to answer the question. Be detailed, use bullet points, cite sources, include numbers/stats.
+If the answer isn't in the context, say so clearly.
 
 CONTEXT:
 {context}
 
 QUESTION: {question}
 
-DETAILED ANSWER:""",
+ANSWER:""",
             input_variables=["context", "question"]
         )
 
         logger.info("🎉 FREE RAG Engine ready! Total cost: $0/month")
 
     def _format_docs(self, docs: List[Document]) -> str:
-        """Format retrieved docs into a rich context string"""
+        """Format retrieved docs into context string"""
         parts = []
         for i, doc in enumerate(docs):
             source = doc.metadata.get("source", "Unknown")
@@ -133,11 +126,7 @@ DETAILED ANSWER:""",
             )
         return "\n\n".join(parts)
 
-    def ingest_documents(
-        self,
-        documents: List[Document],
-        batch_size: int = 100
-    ) -> Dict:
+    def ingest_documents(self, documents: List[Document], batch_size: int = 100) -> Dict:
         """Ingest documents into the vector store"""
         logger.info(f"Ingesting {len(documents)} document(s)...")
         start_time = time.time()
@@ -159,17 +148,12 @@ DETAILED ANSWER:""",
             "ingestion_time": ingestion_time
         }
 
-    def query(
-        self,
-        question: str,
-        k: int = 5,
-        filter_dict: Optional[Dict] = None
-    ) -> RAGResponse:
+    def query(self, question: str, k: int = 4, filter_dict: Optional[Dict] = None) -> RAGResponse:
         """Query the RAG system"""
         logger.info(f"Query: {question[:100]}")
         total_start = time.time()
 
-        # Retrieve relevant docs
+        # Step 1: Retrieve relevant docs (fast — local embeddings)
         retrieval_start = time.time()
         if filter_dict:
             retrieved_docs = self.vectorstore.similarity_search(question, k=k, filter=filter_dict)
@@ -188,26 +172,18 @@ DETAILED ANSWER:""",
                 total_time=time.time() - total_start
             )
 
-        # Build LCEL chain with current k
-        retriever = self.vectorstore.as_retriever(search_kwargs={"k": k})
-        chain = (
-            {
-                "context": retriever | self._format_docs,
-                "question": RunnablePassthrough()
-            }
-            | self.qa_prompt
-            | self.llm
-            | StrOutputParser()
-        )
+        # Step 2: Format context from retrieved docs
+        context = self._format_docs(retrieved_docs)
 
-        # Generate answer
+        # Step 3: Generate answer (direct prompt → LLM, no second retrieval)
         generation_start = time.time()
         logger.info("Generating answer with Ollama...")
-        answer = chain.invoke(question)
+        direct_chain = self.qa_prompt | self.llm | StrOutputParser()
+        answer = direct_chain.invoke({"context": context, "question": question})
         generation_time = time.time() - generation_start
 
         total_time = time.time() - total_start
-        logger.info(f"✅ Done in {total_time:.2f}s")
+        logger.info(f"✅ Done in {total_time:.2f}s (retrieval: {retrieval_time:.2f}s, generation: {generation_time:.2f}s)")
 
         return RAGResponse(
             answer=answer,
@@ -219,7 +195,6 @@ DETAILED ANSWER:""",
         )
 
     def _format_sources(self, documents: List[Document]) -> List[Dict]:
-        """Format documents into source metadata"""
         return [
             {
                 "id": i + 1,
@@ -234,28 +209,22 @@ DETAILED ANSWER:""",
         ]
 
     def _estimate_confidence(self, answer: str) -> float:
-        """Simple confidence estimation"""
-        uncertainty_phrases = [
-            "i don't have", "i'm not sure", "i cannot",
-            "unclear", "not enough information", "no information"
-        ]
+        uncertainty_phrases = ["i don't have", "i'm not sure", "i cannot", "unclear", "not enough information"]
         for phrase in uncertainty_phrases:
             if phrase in answer.lower():
                 return 0.3
         return 0.8
 
     def get_stats(self) -> Dict:
-        """Get vector store statistics"""
         collection = self.vectorstore._collection
         return {
             "total_documents": collection.count(),
-            "embedding_model": "nomic-embed-text via Ollama (FREE)",
+            "embedding_model": "all-MiniLM-L6-v2 (HuggingFace, local)",
             "llm_model": f"{self.ollama_model} via Ollama (FREE)",
             "total_cost": "$0/month"
         }
 
     def clear_database(self):
-        """Clear all documents from vector store"""
         logger.warning("Clearing vector database...")
         self.vectorstore.delete_collection()
         logger.info("Vector database cleared")
